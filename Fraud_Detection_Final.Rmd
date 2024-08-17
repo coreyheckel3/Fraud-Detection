@@ -1,0 +1,351 @@
+---
+title: "Fraud_Detection_Final"
+output: pdf_document
+date: "2024-08-17"
+---
+
+#install packages and load libraries
+```{r}
+install.packages("caTools")
+install.packages("DMwR")
+install.packages("corrplot")
+install.packages("dplyr")
+install.packages("ggplot2")
+install.packages("caret")
+install.packages("randomForest")
+install.packages("pROC")
+install.packages("smotefamily")
+install.packages("ROCR")
+install.packages("datasets")
+install.packages("party")
+install.packages("magrittr")
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(caTools)
+library(DMwR2)
+library(randomForest)
+library(pROC)
+library(smotefamily)
+library(ROCR)
+library(datasets)
+library(party)
+library(magrittr)
+library(DMwR)
+
+
+```
+
+
+#load data f
+```{r}
+setwd('E:/541 Statistics/group project/FA541FinalProject/FA541FinalProject')
+credit_data <- read.csv('creditcard.csv')
+View(credit_data)
+colnames(credit_data)
+
+#data Preprocessing
+missing_values <- sapply(credit_data, function(x) sum(is.na(x)))
+print(missing_values)
+
+```
+
+#Data Splitting
+
+```{r}
+
+set.seed(123)
+split <- sample.split(credit_data$Class, SplitRatio = 0.8)
+train_data <- subset(credit_data, split == TRUE)
+#View(train_data)
+test_data <- subset(credit_data, split == FALSE)
+#View(test_data)
+#nrow(train_data)  
+#nrow(test_data) 
+
+```
+
+# Exploratory Data Analysis (EDA)
+
+```{r}
+
+#Distribution Analysis
+ggplot(train_data, aes(x = Time)) + 
+  geom_histogram(bins = 50, fill = 'blue', color = 'black') + 
+  labs(title = 'Distribution of Transactions Over Time', x = 'Time (seconds)', y = 'Count')
+
+
+```
+
+
+```{r}
+
+#Amount Distribution
+ggplot(train_data, aes(x = Amount)) + 
+  geom_histogram(bins = 50, fill = 'blue', color = 'black') + 
+  labs(title = 'Distribution of Transaction Amounts', x = 'Amount', y = 'Count')
+
+
+
+```
+
+#Correlation Analysis
+```{r}
+
+cor_matrix <- cor(train_data %>% select(-Class))
+corrplot::corrplot(cor_matrix, method = 'circle', tl.cex = 0.6)
+
+```
+
+#Transaction amount by class
+```{r}
+
+ggplot(train_data, aes(x = factor(Class), y = Amount)) +
+  geom_boxplot(fill = 'blue', color = 'black') +
+  labs(title = 'Transaction Amount by Class', x = 'Class (0 = Non-Fraudulent, 1 = Fraudulent)', y = 'Amount') +
+  scale_y_log10()  
+
+```
+
+
+#Density plots of Principal Components for visual of the distribution along each principal component axis.
+```{r}
+
+ggplot(train_data, aes(x = V1, fill = factor(Class))) +
+  geom_density(alpha = 0.5) +
+  labs(title = 'Density Plot of V1', x = 'V1', y = 'Density') +
+  theme(legend.position = 'top')
+
+```
+
+#first 5 components by class
+```{r}
+
+library(tidyr)
+
+train_data %>%
+  select(V1:V5, Class) %>%
+  gather(key = 'Component', value = 'Value', -Class) %>%
+  ggplot(aes(x = Component, y = Value, fill = factor(Class))) +
+  geom_boxplot() +
+  labs(title = 'Boxplots of Principal Components by Class', x = 'Principal Component', y = 'Value') +
+  theme(legend.position = 'top')
+
+```
+
+
+
+#Feature Engineering
+#Handle Class Imbalance using SMOTE from smotefamily package
+
+```{r}
+install.packages("smotefamily")
+install.packages("dplyr")
+library(smotefamily)
+library(dplyr)
+
+class_distribution <- table(train_data$Class)
+print(class_distribution)
+
+```
+
+#Apply SMOTE to balance the dataset
+
+```{r}
+
+smote_output <- SMOTE(train_data[,-which(names(train_data) == "Class")], train_data$Class)
+train_data_balanced <- smote_output$data
+names(train_data_balanced)[ncol(train_data_balanced)] <- "Class"
+#class distribution after applying SMOTE (it's more balanced)
+print(table(train_data_balanced$Class))
+
+
+```
+
+
+#convert categorical variables to factors because of error
+```{r}
+
+train_data_balanced <- train_data_balanced %>% 
+  mutate(across(where(is.character), as.factor))
+train_data_balanced$Class <- as.factor(train_data_balanced$Class)
+
+```
+
+
+
+```{r}
+
+#logistic regression model with balances SMOTE dataset
+logistic_model <- glm(Class ~ ., data = train_data_balanced, family = "binomial")
+summary(logistic_model)
+
+```
+
+
+
+#Predict and evaluate
+```{r}
+
+predict_reg <- predict(logistic_model, test_data, type = "response")
+predict_reg <- ifelse(predict_reg > 0.5, 1, 0)
+table(test_data$Class, predict_reg)
+
+missing_classerr <- mean(predict_reg != test_data$Class)
+print(paste('Accuracy =', 1 - missing_classerr))
+
+```
+
+
+
+#ROC-AUC Curve
+```{r}
+library(ROCR)
+ROCPred <- prediction(predict_reg, test_data$Class)
+ROCPer <- performance(ROCPred, measure = "tpr", x.measure = "fpr")
+auc <- performance(ROCPred, measure = "auc")
+auc <- auc@y.values[[1]]
+print(paste('AUC =', auc))
+
+```
+
+
+#plot curve
+```{r}
+
+plot(ROCPer)
+plot(ROCPer, colorize = TRUE, print.cutoffs.at = seq(0.1, by = 0.1), main = "ROC CURVE")
+abline(a = 0, b = 1)
+legend(.6, .4, round(auc, 4), title = "AUC", cex = 1)
+
+```
+
+
+#TREE - simplied version of decision tree to show plot
+```{r}
+library(party)
+
+#more restrictive control parameters
+control_params <- ctree_control(
+  maxdepth = 3,    #limit the maximum depth of the tree
+  minsplit = 200,  #minimum number of samples required to split a node
+  minbucket = 100, #minimum number of samples in any terminal node
+  mincriterion = 0.95  #minimum value of the test statistic that must be exceeded in order to split a node
+)
+
+#train the tree model with the control parameters
+model <- ctree(Class ~ ., data = train_data_balanced, controls = control_params)
+
+plot(model)
+
+```
+
+
+```{r}
+
+#full tree model
+library(party)
+model <- ctree(Class ~ ., data = train_data_balanced)
+
+#pPredict on the test data
+predict_model <- predict(model, test_data)
+
+# Confusion matrix: no need for thresholding
+m_at <- table(test_data$Class, predict_model)
+print(m_at)
+
+
+#calculate accuracy
+ac_Test <- sum(diag(m_at)) / sum(m_at)
+print(paste('Accuracy for test is found to be', ac_Test))
+
+```
+
+
+
+```{r}
+
+#Below chunk was updated because of NaN values when trying to calculate AUC
+#predict probabilities
+predict_proba <- predict(model, test_data, type = "prob")
+
+#extract probabilities for the positive class (1) from the list
+probabilities <- sapply(predict_proba, function(x) x[2])
+
+library(ROCR)
+
+#calculate AUC using ROCR
+pred <- prediction(probabilities, test_data$Class)
+perf <- performance(pred, measure = "auc")
+auc <- perf@y.values[[1]]
+print(paste('AUC =', auc))
+
+```
+
+
+```{r}
+
+#Plot ROC curve
+roc_perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+plot(roc_perf, colorize = TRUE, main = "ROC Curve")
+abline(a = 0, b = 1, lty = 2, col = "gray")
+legend("bottomright", legend = paste("AUC =", round(auc, 4)), col = "black", lty = 1)
+
+```
+
+#Random Forest
+```{r}
+
+library(ranger)
+classifier_RF <- ranger(Class ~ ., data = train_data_balanced, importance = 'impurity', probability = TRUE, num.trees = 500)
+rf_prediction <- predict(classifier_RF, data = test_data)
+y_prediction <- rf_prediction$predictions[,2]
+class_labels <- ifelse(y_prediction > 0.5, 1, 0)
+confusion_mtx <- table(test_data$Class, class_labels)
+accuracy <- sum(diag(confusion_mtx)) / sum(confusion_mtx)
+print(paste('Accuracy for test is found to be', accuracy))
+confusion_mtx
+
+```
+
+
+#AUC
+```{r}
+
+pred <- prediction(y_prediction, test_data$Class)
+perf <- performance(pred, measure = "auc")
+auc <- perf@y.values[[1]]
+print(paste('AUC =', auc))
+
+```
+
+
+#ROC curve
+```{r}
+
+roc_perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+plot(roc_perf, colorize = TRUE, main = "ROC Curve")
+abline(a = 0, b = 1, lty = 2, col = "gray")
+legend("bottomright", legend = paste("AUC =", round(auc, 4)), col = "black", lty = 1)
+
+```
+
+
+#Variable importance plot
+```{r}
+
+importance <- importance(classifier_RF)
+varImpPlot <- data.frame(Feature = names(importance), Importance = importance)
+varImpPlot <- varImpPlot[order(-varImpPlot$Importance),]
+print(varImpPlot)
+
+```
+
+
+
+
+
+
+
+
+
